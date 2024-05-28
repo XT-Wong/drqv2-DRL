@@ -44,6 +44,21 @@ class RandomShiftsAug(nn.Module):
                              padding_mode='zeros',
                              align_corners=False)
 
+class RandomCropAug(nn.Module):
+    def __init__(self, crop_size):
+        super().__init__()
+        self.crop_size = crop_size
+
+    def forward(self, x):
+        n, c, h, w = x.size()
+        print("raw", x.size())
+        assert h == w
+        start_x = torch.randint(0, w - self.crop_size + 1, (n,), device=x.device)
+        start_y = torch.randint(0, h - self.crop_size + 1, (n,), device=x.device)
+        indices_x = start_x.view(-1, 1, 1).expand(-1, self.crop_size, self.crop_size)
+        indices_y = start_y.view(-1, 1, 1).expand(-1, self.crop_size, self.crop_size)
+        x_cropped = x[torch.arange(n), :, indices_y, indices_x]
+        return F.interpolate(x_cropped, size=(h, w), mode='bilinear', align_corners=False)
 
 class Encoder(nn.Module):
     def __init__(self, obs_shape):
@@ -61,6 +76,7 @@ class Encoder(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs):
+        print("encoder input", obs.size())
         obs = obs / 255.0 - 0.5
         h = self.convnet(obs)
         h = h.view(h.shape[0], -1)
@@ -83,6 +99,7 @@ class Actor(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs, std):
+        print("actor input", obs)
         h = self.trunk(obs)
 
         mu = self.policy(h)
@@ -150,8 +167,10 @@ class DrQV2Agent:
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         # data augmentation
+        # self.aug = nn.Sequential(
+        # RandomShiftsAug(pad=4),
+        # RandomCropAug(crop_size=4))
         self.aug = RandomShiftsAug(pad=4)
-
         self.train()
         self.critic_target.train()
 
