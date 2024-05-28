@@ -125,7 +125,7 @@ class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
                  update_every_steps, stddev_schedule, stddev_clip, use_tb,
-                 use_r3m):
+                 use_r3m, use_vip):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -134,6 +134,7 @@ class DrQV2Agent:
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
         self.use_r3m = use_r3m
+        self.use_vip = use_vip
         
 
         # models
@@ -142,6 +143,11 @@ class DrQV2Agent:
             self.encoder = load_r3m("resnet50").to(device)
             self.encoder.eval()
             self.repr_dim = 2048 * 3
+        elif use_vip:
+            from vip import load_vip
+            self.encoder = load_vip().to(device)
+            self.encoder.eval()
+            self.repr_dim = 1024 * 3
         else:
             self.encoder = Encoder(obs_shape).to(device)
             self.repr_dim = self.encoder.repr_dim
@@ -179,6 +185,10 @@ class DrQV2Agent:
             obs = self.encoder(obs)
             # concat
             obs = obs.view(-1, 3 * 2048)
+        elif self.use_vip:
+            obs = obs.view(-1, 3, 84, 84)
+            obs = self.encoder(obs)
+            obs = obs.view(-1, 3 * 1024)
         else:
             obs = self.encoder(obs.unsqueeze(0))
         stddev = utils.schedule(self.stddev_schedule, step)
@@ -258,7 +268,7 @@ class DrQV2Agent:
         obs = self.aug(obs.float())
         next_obs = self.aug(next_obs.float())
         # encode
-        if self.use_r3m:
+        if self.use_r3m or self.use_vip:
             obs = obs.view(-1, 3, 84, 84)
             next_obs = next_obs.view(-1, 3, 84, 84)
         obs = self.encoder(obs)
@@ -268,6 +278,9 @@ class DrQV2Agent:
         if self.use_r3m:
             obs = obs.view(-1, 3 * 2048)
             next_obs = next_obs.view(-1, 3 * 2048)
+        elif self.use_vip:
+            obs = obs.view(-1, 3 * 1024)
+            next_obs = next_obs.view(-1, 3 * 1024)
 
         if self.use_tb:
             metrics['batch_reward'] = reward.mean().item()
