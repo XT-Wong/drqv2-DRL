@@ -51,7 +51,7 @@ class RandomCropAug(nn.Module):
 
     def forward(self, x):
         n, c, h, w = x.size()
-        print("raw", x.size())
+
         assert h == w
         start_x = torch.randint(0, w - self.crop_size + 1, (n,), device=x.device)
         start_y = torch.randint(0, h - self.crop_size + 1, (n,), device=x.device)
@@ -76,7 +76,7 @@ class Encoder(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs):
-        print("encoder input", obs.size())
+
         obs = obs / 255.0 - 0.5
         h = self.convnet(obs)
         h = h.view(h.shape[0], -1)
@@ -99,7 +99,7 @@ class Actor(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs, std):
-        print("actor input", obs)
+
         h = self.trunk(obs)
 
         mu = self.policy(h)
@@ -167,9 +167,7 @@ class DrQV2Agent:
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         # data augmentation
-        # self.aug = nn.Sequential(
-        # RandomShiftsAug(pad=4),
-        # RandomCropAug(crop_size=4))
+
         self.aug = RandomShiftsAug(pad=4)
         self.train()
         self.critic_target.train()
