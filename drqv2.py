@@ -167,7 +167,6 @@ class DrQV2Agent:
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         # data augmentation
-
         self.aug = RandomShiftsAug(pad=4)
         self.train()
         self.critic_target.train()
