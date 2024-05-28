@@ -124,7 +124,8 @@ class Critic(nn.Module):
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb):
+                 update_every_steps, stddev_schedule, stddev_clip, use_tb,
+                 use_r3m):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -132,15 +133,24 @@ class DrQV2Agent:
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
+        self.use_r3m = use_r3m
+        
 
         # models
-        self.encoder = Encoder(obs_shape).to(device)
-        self.actor = Actor(self.encoder.repr_dim, action_shape, feature_dim,
+        if use_r3m:
+            from r3m import load_r3m
+            self.encoder = load_r3m("resnet50").to(device)
+            self.encoder.eval()
+            self.repr_dim = 2048 * 3
+        else:
+            self.encoder = Encoder(obs_shape).to(device)
+            self.repr_dim = self.encoder.repr_dim
+        self.actor = Actor(self.repr_dim, action_shape, feature_dim,
                            hidden_dim).to(device)
 
-        self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim,
+        self.critic = Critic(self.repr_dim, action_shape, feature_dim,
                              hidden_dim).to(device)
-        self.critic_target = Critic(self.encoder.repr_dim, action_shape,
+        self.critic_target = Critic(self.repr_dim, action_shape,
                                     feature_dim, hidden_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
@@ -163,7 +173,14 @@ class DrQV2Agent:
 
     def act(self, obs, step, eval_mode):
         obs = torch.as_tensor(obs, device=self.device)
-        obs = self.encoder(obs.unsqueeze(0))
+        if self.use_r3m:
+            # split into 3 images
+            obs = obs.view(-1, 3, 84, 84)
+            obs = self.encoder(obs)
+            # concat
+            obs = obs.view(-1, 3 * 2048)
+        else:
+            obs = self.encoder(obs.unsqueeze(0))
         stddev = utils.schedule(self.stddev_schedule, step)
         dist = self.actor(obs, stddev)
         if eval_mode:
@@ -241,9 +258,16 @@ class DrQV2Agent:
         obs = self.aug(obs.float())
         next_obs = self.aug(next_obs.float())
         # encode
+        if self.use_r3m:
+            obs = obs.view(-1, 3, 84, 84)
+            next_obs = next_obs.view(-1, 3, 84, 84)
         obs = self.encoder(obs)
         with torch.no_grad():
             next_obs = self.encoder(next_obs)
+        
+        if self.use_r3m:
+            obs = obs.view(-1, 3 * 2048)
+            next_obs = next_obs.view(-1, 3 * 2048)
 
         if self.use_tb:
             metrics['batch_reward'] = reward.mean().item()
