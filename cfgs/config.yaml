@@ -47,6 +47,7 @@ agent:
   stddev_clip: 0.3
   use_r3m: false
   use_vip: false
+  use_optical_flow: false
 
 hydra:
   run:

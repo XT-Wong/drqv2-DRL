@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import cv2
 
 import utils
 
@@ -125,7 +126,7 @@ class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
                  update_every_steps, stddev_schedule, stddev_clip, use_tb,
-                 use_r3m, use_vip):
+                 use_r3m, use_vip, use_optical_flow):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -135,6 +136,7 @@ class DrQV2Agent:
         self.stddev_clip = stddev_clip
         self.use_r3m = use_r3m
         self.use_vip = use_vip
+        self.use_optical_flow = use_optical_flow
         
 
         # models
@@ -178,6 +180,21 @@ class DrQV2Agent:
         self.critic.train(training)
 
     def act(self, obs, step, eval_mode):
+        if self.use_optical_flow:
+            obs = obs.reshape(-1, 3, 84, 84) # rgb
+            grey_obs = []
+            for i in range(obs.shape[0]):
+                grey_obs.append(cv2.cvtColor(obs[i].transpose(1, 2, 0), cv2.COLOR_RGB2GRAY))
+            flows = [cv2.calcOpticalFlowFarneback(grey_obs[i], grey_obs[i+1], None, 0.5, 3, 15, 3, 5, 1.2, 0) for i in range(len(grey_obs)-1)]
+            rst = np.zeros((84, 84, (obs.shape[0] - 1) * 3), dtype=np.uint8) # one frame all zero to keep shape
+            for i in range(len(flows)):
+                flow = flows[i]
+                magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+                rst[..., 3 * i] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                rst[..., 3 * i + 1] = angle * 180 / np.pi / 2
+            rst = rst.transpose(2, 0, 1)
+            obs = np.concatenate([rst,obs[-1]], axis=0)
+            
         obs = torch.as_tensor(obs, device=self.device)
         if self.use_r3m:
             # split into 3 images
