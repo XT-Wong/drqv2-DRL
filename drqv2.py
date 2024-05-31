@@ -126,7 +126,7 @@ class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
                  update_every_steps, stddev_schedule, stddev_clip, use_tb,
-                 use_r3m, use_vip, use_optical_flow):
+                 use_r3m, use_vip, use_optical_flow, encoder_eval):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -137,18 +137,17 @@ class DrQV2Agent:
         self.use_r3m = use_r3m
         self.use_vip = use_vip
         self.use_optical_flow = use_optical_flow
+        self.encoder_eval = encoder_eval
         
 
         # models
         if use_r3m:
             from r3m import load_r3m
             self.encoder = load_r3m("resnet50").to(device)
-            self.encoder.eval()
             self.repr_dim = 2048 * 3
         elif use_vip:
             from vip import load_vip
             self.encoder = load_vip().to(device)
-            self.encoder.eval()
             self.repr_dim = 1024 * 3
         else:
             self.encoder = Encoder(obs_shape).to(device)
@@ -175,7 +174,7 @@ class DrQV2Agent:
 
     def train(self, training=True):
         self.training = training
-        self.encoder.train(training)
+        self.encoder.eval() if self.encoder_eval else self.encoder.train(training)
         self.actor.train(training)
         self.critic.train(training)
 

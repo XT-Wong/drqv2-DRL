@@ -48,6 +48,7 @@ agent:
   use_r3m: false
   use_vip: false
   use_optical_flow: false
+  encoder_eval: false
 
 hydra:
   run:
