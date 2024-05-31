@@ -179,9 +179,9 @@ class DrQV2Agent:
         self.actor.train(training)
         self.critic.train(training)
 
-    def act(self, obs, step, eval_mode):
-        if self.use_optical_flow:
-            obs = obs.reshape(-1, 3, 84, 84) # rgb
+    def obs_to_optical_flow(self, obs, obs_type="numpy", batched=False):
+        def obs_to_optical_flow_once(obs:np.ndarray):
+            obs = obs.reshape(-1, 3, 84, 84)
             grey_obs = []
             for i in range(obs.shape[0]):
                 grey_obs.append(cv2.cvtColor(obs[i].transpose(1, 2, 0), cv2.COLOR_RGB2GRAY))
@@ -190,11 +190,32 @@ class DrQV2Agent:
             for i in range(len(flows)):
                 flow = flows[i]
                 magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+                # remove too small magnitude and angle
+                magnitude[magnitude < 0.4] = 0
+                angle[magnitude < 0.4] = 0
                 rst[..., 3 * i] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                 rst[..., 3 * i + 1] = angle * 180 / np.pi / 2
             rst = rst.transpose(2, 0, 1)
+            # for i in range(obs.shape[0]):
+            #     cv2.imwrite(f"/root/autodl-tmp/code/drqv2-DRL/obs_{i}.png", obs[i].transpose(1, 2, 0))
+            # cv2.imwrite("/root/autodl-tmp/code/drqv2-DRL/flow_0.png", rst[:3].transpose(1, 2, 0))
+            # cv2.imwrite("/root/autodl-tmp/code/drqv2-DRL/flow_1.png", rst[3:6].transpose(1, 2, 0))
             obs = np.concatenate([rst,obs[-1]], axis=0)
-            
+            return obs
+        
+        if obs_type == "torch":
+            obs = obs.cpu().numpy()
+        if batched:
+            obs = np.array([obs_to_optical_flow_once(obs[i]) for i in range(obs.shape[0])]) # (batch, 9, 84, 84)
+        else:
+            obs = obs_to_optical_flow_once(obs)
+        if obs_type == "torch":
+            obs = torch.tensor(obs, device=self.device)
+        return obs
+
+    def act(self, obs, step, eval_mode):
+        # if self.use_optical_flow:
+        #     obs = self.obs_to_optical_flow(obs)
         obs = torch.as_tensor(obs, device=self.device)
         if self.use_r3m:
             # split into 3 images

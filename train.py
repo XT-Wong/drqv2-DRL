@@ -101,6 +101,14 @@ class Workspace:
 
         while eval_until_episode(episode):
             time_step = self.eval_env.reset()
+            if self.agent.use_optical_flow:
+                time_step = dmc.ExtendedTimeStep(
+                    time_step.step_type, 
+                    time_step.reward,
+                    time_step.discount, 
+                    utils.obs_to_optical_flow_once(time_step.observation),
+                    time_step.action
+                )
             self.video_recorder.init(self.eval_env, enabled=(episode == 0))
             while not time_step.last():
                 with torch.no_grad(), utils.eval_mode(self.agent):
@@ -108,6 +116,14 @@ class Workspace:
                                             self.global_step,
                                             eval_mode=True)
                 time_step = self.eval_env.step(action)
+                if self.agent.use_optical_flow:
+                    time_step = dmc.ExtendedTimeStep(
+                        time_step.step_type, 
+                        time_step.reward,
+                        time_step.discount, 
+                        utils.obs_to_optical_flow_once(time_step.observation),
+                        time_step.action
+                    )
                 self.video_recorder.record(self.eval_env)
                 total_reward += time_step.reward
                 step += 1
@@ -132,6 +148,14 @@ class Workspace:
 
         episode_step, episode_reward = 0, 0
         time_step = self.train_env.reset()
+        if self.agent.use_optical_flow:
+            time_step = dmc.ExtendedTimeStep(
+                time_step.step_type, 
+                time_step.reward,
+                time_step.discount, 
+                utils.obs_to_optical_flow_once(time_step.observation),
+                time_step.action
+            )
         self.replay_storage.add(time_step)
         self.train_video_recorder.init(time_step.observation)
         metrics = None
@@ -156,6 +180,14 @@ class Workspace:
 
                 # reset env
                 time_step = self.train_env.reset()
+                if self.agent.use_optical_flow:
+                    time_step = dmc.ExtendedTimeStep(
+                        time_step.step_type, 
+                        time_step.reward,
+                        time_step.discount, 
+                        utils.obs_to_optical_flow_once(time_step.observation),
+                        time_step.action
+                    )
                 self.replay_storage.add(time_step)
                 self.train_video_recorder.init(time_step.observation)
                 # try to save snapshot
@@ -183,6 +215,14 @@ class Workspace:
 
             # take env step
             time_step = self.train_env.step(action)
+            if self.agent.use_optical_flow:
+                time_step = dmc.ExtendedTimeStep(
+                    time_step.step_type, 
+                    time_step.reward,
+                    time_step.discount, 
+                    utils.obs_to_optical_flow_once(time_step.observation),
+                    time_step.action
+                )
             episode_reward += time_step.reward
             self.replay_storage.add(time_step)
             self.train_video_recorder.record(time_step.observation)
