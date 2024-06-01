@@ -125,8 +125,9 @@ class Critic(nn.Module):
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb):
+                 update_every_steps, stddev_schedule, stddev_clip, actor_update_delay, use_tb):
         self.device = device
+        self.actor_update_delay = actor_update_delay
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
         self.use_tb = use_tb
@@ -259,12 +260,19 @@ class DrQV2Agent:
         met = self.update_critic(obs, action, reward, discount, next_obs, step)
         metrics.update(met)
 
-        # update actor
-        metrics.update(self.update_actor(obs.detach(), step))
-
         # update critic target
         utils.soft_update_params(self.critic, self.critic_target,
                                  self.critic_target_tau)
+
+
+        # update actor
+        if step % (self.update_every_steps * self.actor_update_delay) == 0:
+            metrics.update(self.update_actor(obs.detach(), step))
+
+            # update actor target
+            # utils.soft_update_params(self.actor, self.actor_target,
+            #                         self.actor_target_tau)
+        # metrics.update(self.update_actor(obs.detach(), step))
         # # update PER
         # print('2', replay_loader.dataset.str2fn, step)
         
@@ -273,11 +281,12 @@ class DrQV2Agent:
 
 class DrQV2Agent_with_target:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
-                 hidden_dim, critic_target_tau, actor_target_tau, num_expl_steps,
+                 hidden_dim, critic_target_tau, actor_target_tau, actor_update_delay, num_expl_steps,
                  update_every_steps, stddev_schedule, stddev_clip, use_tb):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.actor_target_tau = actor_target_tau
+        self.actor_update_delay = actor_update_delay
         self.update_every_steps = update_every_steps
         self.use_tb = use_tb
         self.num_expl_steps = num_expl_steps
@@ -411,7 +420,7 @@ class DrQV2Agent_with_target:
                                  self.critic_target_tau)
 
         # update actor
-        if step % (self.update_every_steps * 2) == 0:
+        if step % (self.update_every_steps * self.actor_update_delay) == 0:
             metrics.update(self.update_actor(obs.detach(), step))
 
             # update actor target
