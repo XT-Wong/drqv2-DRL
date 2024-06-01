@@ -7,52 +7,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as T
-import hashlib
+
 import utils
 
-class CLOPLayer(nn.Module):
-    def __init__(self, p=0.9):
-        super().__init__()
-        self.p = p
-
-    def _shuffle(self, x):
-        batch_size = x.shape[0]
-        nb_channels = x.shape[1]
-        flat = x.flatten(start_dim=2, end_dim=-1)
-        idx = self._index_permute(x[0, 0]).to(x.device)
-        idx = idx.repeat(batch_size, nb_channels, 1)
-        res = torch.gather(flat, 2, idx)
-        return res.view_as(x)
-
-    def _index_permute(self, x):
-        n_element = x.nelement()
-        dim = int(np.sqrt(n_element))
-        permuted_indexes = torch.arange(0, n_element, dtype=int)
-        p = (1 - self.p / 2, self.p / 8, self.p / 8, self.p / 8, self.p / 8)
-        for i in range(-n_element + 1, n_element):
-            i = abs(i)
-            r = np.random.choice([0, 1, 2, 3, 4], p=p)
-            if r != 0:
-                if r == 1:
-                    idx = i + 1
-                if r == 2:
-                    idx = i - 1
-                if r == 3:
-                    idx = i + dim
-                if r == 4:
-                    idx = i - dim
-                if (idx > 0) & (idx < n_element):
-                    tmp = int(permuted_indexes[i])
-                    permuted_indexes[i] = int(permuted_indexes[idx])
-                    permuted_indexes[idx] = tmp
-        return permuted_indexes
-
-    def forward(self, x):
-        # print("shuffled")
-        shuffled = self._shuffle(x)
-        return shuffled
-    
 
 class RandomShiftsAug(nn.Module):
     def __init__(self, pad):
@@ -88,13 +45,13 @@ class RandomShiftsAug(nn.Module):
                              align_corners=False)
 
 
-
 class Encoder(nn.Module):
     def __init__(self, obs_shape):
         super().__init__()
+
         assert len(obs_shape) == 3
         self.repr_dim = 32 * 35 * 35
-        
+
         self.convnet = nn.Sequential(nn.Conv2d(obs_shape[0], 32, 3, stride=2),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
@@ -104,66 +61,10 @@ class Encoder(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs):
-
         obs = obs / 255.0 - 0.5
         h = self.convnet(obs)
-
         h = h.view(h.shape[0], -1)
-        
         return h
-
-class PadResizePlus(nn.Module):
-    def __init__(self, highest_pad_strength):
-        super().__init__()
-        self.highest_pad_strength = int(highest_pad_strength)
-
-    def crop(self, imgs, pad_x, pad_y):
-        n, c, h_pad, w_pad = imgs.size()
-
-        # calculate the crop size
-        crop_x = w_pad - pad_x
-        crop_y = h_pad - pad_y
-
-        # create a grid for cropping
-        eps_x = 1.0 / w_pad
-        eps_y = 1.0 / h_pad
-        x_range = torch.linspace(-1.0 + eps_x, 1.0 - eps_x, w_pad, device=imgs.device, dtype=imgs.dtype)[:crop_x]
-        y_range = torch.linspace(-1.0 + eps_y, 1.0 - eps_y, h_pad, device=imgs.device, dtype=imgs.dtype)[:crop_y]
-
-        grid_y, grid_x = torch.meshgrid(y_range, x_range)
-
-        base_grid = torch.stack([grid_x, grid_y], dim=-1)
-        # print('base_grid.shape', base_grid.shape)
-
-        shift_x = torch.randint(0, pad_x + 1, size=(n, 1, 1, 1), device=imgs.device, dtype=imgs.dtype)
-        shift_y = torch.randint(0, pad_y + 1, size=(n, 1, 1, 1), device=imgs.device, dtype=imgs.dtype)
-        shift_x *= 2.0 / w_pad
-        shift_y *= 2.0 / h_pad
-        shift = torch.cat([shift_x, shift_y], dim=-1)
-        grid = base_grid + shift
-        
-        # apply the grid to the input tensor to perform cropping
-        padded_imgs_after_crop = F.grid_sample(imgs, grid)
-
-        return padded_imgs_after_crop
-
-    def forward(self, imgs):
-        strength = torch.randint(0, self.highest_pad_strength+1, (1,)).item()
-        
-        _, _, h, w = imgs.shape
-        pad_x = torch.randint(0, strength+1, (1,)).item()
-        pad_y = strength - pad_x
-        # [x+2*pad_x, y+2*pad_y]
-        padded_imgs_before_crop = F.pad(imgs, (pad_x, pad_x, pad_y, pad_y))
-        # print('padded_imgs_before_crop', padded_imgs_before_crop.shape)
-        # [x+pad_x, y+pad_y]
-        padded_imgs_after_crop = self.crop(padded_imgs_before_crop, pad_x, pad_y)
-        # print('padded_imgs_after_crop', padded_imgs_after_crop.shape)
-        # print('######################')
-
-        resize = T.Resize(size=(h, w))
-
-        return resize(padded_imgs_after_crop)
 
 
 class Actor(nn.Module):
@@ -182,7 +83,6 @@ class Actor(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs, std):
-
         h = self.trunk(obs)
 
         mu = self.policy(h)
@@ -221,12 +121,11 @@ class Critic(nn.Module):
         return q1, q2
 
 
-
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
                  update_every_steps, stddev_schedule, stddev_clip, use_tb,
-                 use_r3m, use_vip, CLOP, use_CycAug):
+                 use_r3m, use_vip, CLOP):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -236,15 +135,9 @@ class DrQV2Agent:
         self.stddev_clip = stddev_clip
         self.use_r3m = use_r3m
         self.use_vip = use_vip
-        self.clop = CLOP
-        self.cloplayer = CLOPLayer(self.clop)
-        self.use_CycAug = use_CycAug
-        self.aug_padcrop = RandomShiftsAug(pad=4)
-        self.aug_padresize = PadResizePlus(highest_pad_strength=16)
-        
+        self.clop_prob = CLOP
+
         # models
-        print("CLOP prob:", self.clop)
-        print("use CycAug:", self.use_CycAug)
         if use_r3m:
             from r3m import load_r3m
             self.encoder = load_r3m("resnet50").to(device)
@@ -252,15 +145,12 @@ class DrQV2Agent:
             self.repr_dim = 2048 * 3
         elif use_vip:
             from vip import load_vip
-            
             self.encoder = load_vip().to(device)
-            print("VIP loaded")
             self.encoder.eval()
             self.repr_dim = 1024 * 3
         else:
             self.encoder = Encoder(obs_shape).to(device)
             self.repr_dim = self.encoder.repr_dim
-
         self.actor = Actor(self.repr_dim, action_shape, feature_dim,
                            hidden_dim).to(device)
 
@@ -277,6 +167,7 @@ class DrQV2Agent:
 
         # data augmentation
         self.aug = RandomShiftsAug(pad=4)
+
         self.train()
         self.critic_target.train()
 
@@ -374,29 +265,13 @@ class DrQV2Agent:
             batch, self.device)
 
         # augment
-        
-        
-        
-        if self.use_CycAug:
-            if (step // 200000) % 2 == 0:
-                augmentation = self.aug_padcrop
-            else:
-                augmentation = self.aug_padresize
-
-            obs = augmentation(obs.float())
-            next_obs = augmentation(next_obs.float())
-        else:
-            obs = self.aug(obs.float())
-            next_obs = self.aug(next_obs.float())
-            
+        obs = self.aug(obs.float())
+        next_obs = self.aug(next_obs.float())
         # encode
         if self.use_r3m or self.use_vip:
             obs = obs.view(-1, 3, 84, 84)
             next_obs = next_obs.view(-1, 3, 84, 84)
         obs = self.encoder(obs)
-        
-        
-        
         with torch.no_grad():
             next_obs = self.encoder(next_obs)
         
@@ -406,12 +281,7 @@ class DrQV2Agent:
         elif self.use_vip:
             obs = obs.view(-1, 3 * 1024)
             next_obs = next_obs.view(-1, 3 * 1024)
-            
-        elif self.clop > 0:
-            obs = obs.view(-1, 32, 35, 35)
-            obs = self.cloplayer(obs)
-            obs = obs.view(obs.shape[0], -1)
-            
+
         if self.use_tb:
             metrics['batch_reward'] = reward.mean().item()
 

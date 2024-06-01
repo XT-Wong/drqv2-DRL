@@ -20,7 +20,7 @@ replay_buffer_num_workers: 4
 nstep: 3
 batch_size: 256
 # misc
-seed: 3407
+seed: 1
 device: cuda
 save_video: true
 save_train_video: false
@@ -47,6 +47,8 @@ agent:
   stddev_clip: 0.3
   use_r3m: false
   use_vip: false
+  CLOP: 0
+  use_CycAug: false
 
 hydra:
   run:
