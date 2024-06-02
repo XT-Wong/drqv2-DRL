@@ -5,6 +5,7 @@
 import hydra
 import numpy as np
 import torch
+from copy import deepcopy
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
@@ -226,7 +227,8 @@ class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
                  update_every_steps, stddev_schedule, stddev_clip, use_tb,
-                 use_r3m, use_vip, CLOP, use_CycAug):
+                 use_r3m, use_vip, CLOP, use_CycAug,
+                 actor_update_delay, with_target=False, actor_target_tau=0):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -234,6 +236,7 @@ class DrQV2Agent:
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
+        
         self.use_r3m = use_r3m
         self.use_vip = use_vip
         self.clop = CLOP
@@ -242,6 +245,9 @@ class DrQV2Agent:
         self.aug_padcrop = RandomShiftsAug(pad=4)
         self.aug_padresize = PadResizePlus(highest_pad_strength=16)
         
+        self.with_target = with_target
+        self.actor_update_delay = actor_update_delay
+
         # models
         print("CLOP prob:", self.clop)
         print("use CycAug:", self.use_CycAug)
@@ -263,6 +269,9 @@ class DrQV2Agent:
 
         self.actor = Actor(self.repr_dim, action_shape, feature_dim,
                            hidden_dim).to(device)
+        if self.with_target:
+            self.actor_target_tau = actor_target_tau
+            self.actor_target = deepcopy(self.actor).to(device)
 
         self.critic = Critic(self.repr_dim, action_shape, feature_dim,
                              hidden_dim).to(device)
@@ -312,10 +321,12 @@ class DrQV2Agent:
 
     def update_critic(self, obs, action, reward, discount, next_obs, step):
         metrics = dict()
-
         with torch.no_grad():
             stddev = utils.schedule(self.stddev_schedule, step)
-            dist = self.actor(next_obs, stddev)
+            if self.with_target:
+                dist = self.actor_target(next_obs, stddev)
+            else:
+                dist = self.actor(next_obs, stddev)
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V = torch.min(target_Q1, target_Q2)
@@ -347,6 +358,7 @@ class DrQV2Agent:
         action = dist.sample(clip=self.stddev_clip)
         log_prob = dist.log_prob(action).sum(-1, keepdim=True)
         Q1, Q2 = self.critic(obs, action)
+        
         Q = torch.min(Q1, Q2)
 
         actor_loss = -Q.mean()
@@ -368,11 +380,12 @@ class DrQV2Agent:
 
         if step % self.update_every_steps != 0:
             return metrics
-
+        # print('0', replay_loader.dataset.str2fn, step)
         batch = next(replay_iter)
+        # print('1', replay_loader.dataset.str2fn, step)
+
         obs, action, reward, discount, next_obs = utils.to_torch(
             batch, self.device)
-
         # augment
         
         
@@ -416,14 +429,21 @@ class DrQV2Agent:
             metrics['batch_reward'] = reward.mean().item()
 
         # update critic
-        metrics.update(
-            self.update_critic(obs, action, reward, discount, next_obs, step))
-
-        # update actor
-        metrics.update(self.update_actor(obs.detach(), step))
+        met = self.update_critic(obs, action, reward, discount, next_obs, step)
+        metrics.update(met)
 
         # update critic target
         utils.soft_update_params(self.critic, self.critic_target,
                                  self.critic_target_tau)
 
+
+        # update actor
+        if step % (self.update_every_steps * self.actor_update_delay) == 0:
+            metrics.update(self.update_actor(obs.detach(), step))
+
+            # update actor target
+            if self.with_target:
+                utils.soft_update_params(self.actor, self.actor_target,
+                                        self.actor_target_tau)
+            metrics.update(self.update_actor(obs.detach(), step))
         return metrics
