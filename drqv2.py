@@ -125,7 +125,7 @@ class Critic(nn.Module):
 class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, actor_update_delay, use_tb):
+                 update_every_steps, stddev_schedule, stddev_clip, actor_update_delay, use_tb, with_target=False, actor_target_tau=0):
         self.device = device
         self.actor_update_delay = actor_update_delay
         self.critic_target_tau = critic_target_tau
@@ -134,11 +134,15 @@ class DrQV2Agent:
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
+        self.with_target = with_target
 
         # models
         self.encoder = Encoder(obs_shape).to(device)
         self.actor = Actor(self.encoder.repr_dim, action_shape, feature_dim,
                            hidden_dim).to(device)
+        if self.with_target:
+            self.actor_target_tau = actor_target_tau
+            self.actor_target = deepcopy(self.actor).to(device)
 
         self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim,
                              hidden_dim).to(device)
@@ -180,18 +184,17 @@ class DrQV2Agent:
         metrics = dict()
         with torch.no_grad():
             stddev = utils.schedule(self.stddev_schedule, step)
-            dist = self.actor(next_obs, stddev)
+            if self.with_target:
+                dist = self.actor_target(next_obs, stddev)
+            else:
+                dist = self.actor(next_obs, stddev)
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V = torch.min(target_Q1, target_Q2)
             target_Q = reward + (discount * target_V)
 
         Q1, Q2 = self.critic(obs, action)
-        # if weight is None:
-        #     weights = torch.ones_like(Q1).to(self.device)
-        # td_error = torch.max(torch.abs(Q1 - target_Q).detach(), torch.abs(Q2 - target_Q).detach())
         critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
-        # critic_loss = torch.mean((Q1 - target_Q)**2 * weight + (Q2 - target_Q)**2 * weight)
 
         if self.use_tb:
             metrics['critic_target_q'] = target_Q.mean().item()
@@ -216,8 +219,7 @@ class DrQV2Agent:
         action = dist.sample(clip=self.stddev_clip)
         log_prob = dist.log_prob(action).sum(-1, keepdim=True)
         Q1, Q2 = self.critic(obs, action)
-        # if weight is None:
-        #     weights = torch.ones_like(Q1).to(self.device)
+        
         Q = torch.min(Q1, Q2)
 
         actor_loss = -Q.mean()
@@ -270,161 +272,8 @@ class DrQV2Agent:
             metrics.update(self.update_actor(obs.detach(), step))
 
             # update actor target
-            # utils.soft_update_params(self.actor, self.actor_target,
-            #                         self.actor_target_tau)
-        # metrics.update(self.update_actor(obs.detach(), step))
-        # # update PER
-        # print('2', replay_loader.dataset.str2fn, step)
-        
-        # replay_loader.dataset.update_priorities((worker_id, eps_fn), idx, td_error)
-        return metrics
-
-class DrQV2Agent_with_target:
-    def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
-                 hidden_dim, critic_target_tau, actor_target_tau, actor_update_delay, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb):
-        self.device = device
-        self.critic_target_tau = critic_target_tau
-        self.actor_target_tau = actor_target_tau
-        self.actor_update_delay = actor_update_delay
-        self.update_every_steps = update_every_steps
-        self.use_tb = use_tb
-        self.num_expl_steps = num_expl_steps
-        self.stddev_schedule = stddev_schedule
-        self.stddev_clip = stddev_clip
-
-        # models
-        self.encoder = Encoder(obs_shape).to(device)
-        self.actor = Actor(self.encoder.repr_dim, action_shape, feature_dim,
-                           hidden_dim).to(device)
-        self.actor_target = deepcopy(self.actor).to(device)
-        
-
-        self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim,
-                             hidden_dim).to(device)
-        self.critic_target = Critic(self.encoder.repr_dim, action_shape,
-                                    feature_dim, hidden_dim).to(device)
-        self.critic_target.load_state_dict(self.critic.state_dict())
-
-        # optimizers
-        self.encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=lr)
-        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=lr)
-        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
-
-        # data augmentation
-        self.aug = RandomShiftsAug(pad=4)
-
-        self.train()
-        self.critic_target.train()
-
-    def train(self, training=True):
-        self.training = training
-        self.encoder.train(training)
-        self.actor.train(training)
-        self.critic.train(training)
-
-    def act(self, obs, step, eval_mode):
-        obs = torch.as_tensor(obs, device=self.device)
-        obs = self.encoder(obs.unsqueeze(0))
-        stddev = utils.schedule(self.stddev_schedule, step)
-        dist = self.actor(obs, stddev)
-        if eval_mode:
-            action = dist.mean
-        else:
-            action = dist.sample(clip=None)
-            if step < self.num_expl_steps:
-                action.uniform_(-1.0, 1.0)
-        return action.cpu().numpy()[0]
-
-    def update_critic(self, obs, action, reward, discount, next_obs, step):
-        metrics = dict()
-
-        with torch.no_grad():
-            stddev = utils.schedule(self.stddev_schedule, step)
-            dist = self.actor_target(next_obs, stddev)
-            # dist = self.actor(next_obs, stddev)
-            next_action = dist.sample(clip=self.stddev_clip)
-            target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
-            target_V = torch.min(target_Q1, target_Q2)
-            target_Q = reward + (discount * target_V)
-
-        Q1, Q2 = self.critic(obs, action)
-        critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
-
-        if self.use_tb:
-            metrics['critic_target_q'] = target_Q.mean().item()
-            metrics['critic_q1'] = Q1.mean().item()
-            metrics['critic_q2'] = Q2.mean().item()
-            metrics['critic_loss'] = critic_loss.item()
-
-        # optimize encoder and critic
-        self.encoder_opt.zero_grad(set_to_none=True)
-        self.critic_opt.zero_grad(set_to_none=True)
-        critic_loss.backward()
-        self.critic_opt.step()
-        self.encoder_opt.step()
-
-        return metrics
-
-    def update_actor(self, obs, step):
-        metrics = dict()
-
-        stddev = utils.schedule(self.stddev_schedule, step)
-        dist = self.actor(obs, stddev)
-        action = dist.sample(clip=self.stddev_clip)
-        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
-        Q1, Q2 = self.critic(obs, action)
-        Q = torch.min(Q1, Q2)
-
-        actor_loss = -Q.mean()
-
-        # optimize actor
-        self.actor_opt.zero_grad(set_to_none=True)
-        actor_loss.backward()
-        self.actor_opt.step()
-
-        if self.use_tb:
-            metrics['actor_loss'] = actor_loss.item()
-            metrics['actor_logprob'] = log_prob.mean().item()
-            metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
-
-        return metrics
-
-    def update(self, replay_iter, step):
-        metrics = dict()
-
-        if step % self.update_every_steps != 0:
-            return metrics
-
-        batch = next(replay_iter)
-        obs, action, reward, discount, next_obs = utils.to_torch(
-            batch, self.device)
-
-        # augment
-        obs = self.aug(obs.float())
-        next_obs = self.aug(next_obs.float())
-        # encode
-        obs = self.encoder(obs)
-        with torch.no_grad():
-            next_obs = self.encoder(next_obs)
-
-        if self.use_tb:
-            metrics['batch_reward'] = reward.mean().item()
-
-        # update critic
-
-        metrics.update(
-            self.update_critic(obs, action, reward, discount, next_obs, step))
-        # update critic target
-        utils.soft_update_params(self.critic, self.critic_target,
-                                 self.critic_target_tau)
-
-        # update actor
-        if step % (self.update_every_steps * self.actor_update_delay) == 0:
+            if self.with_target:
+                utils.soft_update_params(self.actor, self.actor_target,
+                                        self.actor_target_tau)
             metrics.update(self.update_actor(obs.detach(), step))
-
-            # update actor target
-            utils.soft_update_params(self.actor, self.actor_target,
-                                    self.actor_target_tau)
-
         return metrics
