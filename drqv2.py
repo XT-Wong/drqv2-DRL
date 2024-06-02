@@ -343,7 +343,8 @@ class DrQV2Agent:
             # concat
             obs = obs.view(-1, 3 * 2048)
         elif self.use_vip:
-            obs = obs.view(-1, 3, 84, 84)
+            obs = obs.view(-1, 3, 84, 84).to(torch.float32)
+            # print(obs)
             obs = self.encoder(obs)
             obs = obs.view(-1, 3 * 1024)
         else:
