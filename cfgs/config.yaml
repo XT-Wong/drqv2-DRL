@@ -49,6 +49,8 @@ agent:
   stddev_clip: 0.3
   use_r3m: false
   use_vip: false
+  use_optical_flow: false
+  encoder_eval: false
   CLOP: 0
   use_CycAug: false
 

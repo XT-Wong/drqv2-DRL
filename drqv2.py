@@ -8,6 +8,8 @@ import torch
 from copy import deepcopy
 import torch.nn as nn
 import torch.nn.functional as F
+import cv2
+
 import torchvision.transforms as T
 import hashlib
 import utils
@@ -227,7 +229,7 @@ class DrQV2Agent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, num_expl_steps,
                  update_every_steps, stddev_schedule, stddev_clip, use_tb,
-                 use_r3m, use_vip, CLOP, use_CycAug,
+                 use_r3m, use_vip, use_optical_flow, encoder_eval, CLOP, use_CycAug,
                  actor_update_delay, with_target=False, actor_target_tau=0):
         self.device = device
         self.critic_target_tau = critic_target_tau
@@ -239,6 +241,8 @@ class DrQV2Agent:
         
         self.use_r3m = use_r3m
         self.use_vip = use_vip
+        self.use_optical_flow = use_optical_flow
+        self.encoder_eval = encoder_eval
         self.clop = CLOP
         self.cloplayer = CLOPLayer(self.clop)
         self.use_CycAug = use_CycAug
@@ -254,7 +258,6 @@ class DrQV2Agent:
         if use_r3m:
             from r3m import load_r3m
             self.encoder = load_r3m("resnet50").to(device)
-            self.encoder.eval()
             self.repr_dim = 2048 * 3
         elif use_vip:
             from vip import load_vip
@@ -291,11 +294,47 @@ class DrQV2Agent:
 
     def train(self, training=True):
         self.training = training
-        self.encoder.train(training)
+        self.encoder.eval() if self.encoder_eval else self.encoder.train(training)
         self.actor.train(training)
         self.critic.train(training)
 
+    def obs_to_optical_flow(self, obs, obs_type="numpy", batched=False):
+        def obs_to_optical_flow_once(obs:np.ndarray):
+            obs = obs.reshape(-1, 3, 84, 84)
+            grey_obs = []
+            for i in range(obs.shape[0]):
+                grey_obs.append(cv2.cvtColor(obs[i].transpose(1, 2, 0), cv2.COLOR_RGB2GRAY))
+            flows = [cv2.calcOpticalFlowFarneback(grey_obs[i], grey_obs[i+1], None, 0.5, 3, 15, 3, 5, 1.2, 0) for i in range(len(grey_obs)-1)]
+            rst = np.zeros((84, 84, (obs.shape[0] - 1) * 3), dtype=np.uint8) # one frame all zero to keep shape
+            for i in range(len(flows)):
+                flow = flows[i]
+                magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+                # remove too small magnitude and angle
+                magnitude[magnitude < 0.4] = 0
+                angle[magnitude < 0.4] = 0
+                rst[..., 3 * i] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                rst[..., 3 * i + 1] = angle * 180 / np.pi / 2
+            rst = rst.transpose(2, 0, 1)
+            # for i in range(obs.shape[0]):
+            #     cv2.imwrite(f"/root/autodl-tmp/code/drqv2-DRL/obs_{i}.png", obs[i].transpose(1, 2, 0))
+            # cv2.imwrite("/root/autodl-tmp/code/drqv2-DRL/flow_0.png", rst[:3].transpose(1, 2, 0))
+            # cv2.imwrite("/root/autodl-tmp/code/drqv2-DRL/flow_1.png", rst[3:6].transpose(1, 2, 0))
+            obs = np.concatenate([rst,obs[-1]], axis=0)
+            return obs
+        
+        if obs_type == "torch":
+            obs = obs.cpu().numpy()
+        if batched:
+            obs = np.array([obs_to_optical_flow_once(obs[i]) for i in range(obs.shape[0])]) # (batch, 9, 84, 84)
+        else:
+            obs = obs_to_optical_flow_once(obs)
+        if obs_type == "torch":
+            obs = torch.tensor(obs, device=self.device)
+        return obs
+
     def act(self, obs, step, eval_mode):
+        # if self.use_optical_flow:
+        #     obs = self.obs_to_optical_flow(obs)
         obs = torch.as_tensor(obs, device=self.device)
         if self.use_r3m:
             # split into 3 images

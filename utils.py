@@ -5,6 +5,7 @@
 import random
 import re
 import time
+import cv2
 
 import numpy as np
 import torch
@@ -147,3 +148,38 @@ def schedule(schdl, step):
                 mix = np.clip((step - duration1) / duration2, 0.0, 1.0)
                 return (1.0 - mix) * final1 + mix * final2
     raise NotImplementedError(schdl)
+
+
+def obs_to_optical_flow_once(obs:np.ndarray, use_polar=True, cal_only_one_frame=True):
+    obs = obs.reshape(-1, 3, 84, 84)
+    grey_obs = []
+    for i in range(obs.shape[0]):
+        grey_obs.append(cv2.cvtColor(obs[i].transpose(1, 2, 0), cv2.COLOR_RGB2GRAY))
+    flows = [cv2.calcOpticalFlowFarneback(grey_obs[i], grey_obs[i+1], None, 0.5, 3, 15, 3, 5, 1.2, 0) for i in range(len(grey_obs)-1)]
+    rst = np.zeros((84, 84, (obs.shape[0] - 1) * 3), dtype=np.uint8) # one frame all zero to keep shape
+    for i in range(len(flows)):
+        flow = flows[i]
+        if use_polar:
+            magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+            # remove too small magnitude and angle
+            magnitude[magnitude < 0.1] = 0
+            angle[magnitude < 0.1] = 0
+            # rst[..., 3 * i] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            magnitude = np.clip(magnitude, 0, 20)
+            magnitude = (magnitude / 20 * 255).astype(np.uint8)
+            rst[..., 3 * i] = magnitude
+            rst[..., 3 * i + 1] = angle * 180 / np.pi / 2
+        else:
+            # clip & scale
+            flow = np.clip(flow, -20, 20)
+            flow = flow / 20 * 127 + 128
+            flow = flow.astype(np.uint8)
+            rst[..., 3 * i] = flow[..., 0]
+            rst[..., 3 * i + 1] = flow[..., 1]
+    rst = rst.transpose(2, 0, 1)
+    # for i in range(obs.shape[0]):
+    #     cv2.imwrite(f"/root/autodl-tmp/code/drqv2-DRL/obs_{i}.png", obs[i].transpose(1, 2, 0))
+    # cv2.imwrite("/root/autodl-tmp/code/drqv2-DRL/obs_flow_0.png", rst[:3].transpose(1, 2, 0))
+    # cv2.imwrite("/root/autodl-tmp/code/drqv2-DRL/obs_flow_1.png", rst[3:6].transpose(1, 2, 0))
+    obs = np.concatenate([rst,obs[-1]], axis=0)
+    return obs
