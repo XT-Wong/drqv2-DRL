@@ -20,8 +20,8 @@ replay_buffer_num_workers: 4
 nstep: 3
 batch_size: 256
 # misc
-seed: 1
-device: cuda
+seed: 3407
+device: cuda:1
 save_video: true
 save_train_video: false
 use_tb: true
@@ -32,12 +32,14 @@ lr: 1e-4
 feature_dim: 50
 
 agent:
+  # _target_: drqv2.DrQV2Agent_with_target
   _target_: drqv2.DrQV2Agent
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
   device: ${device}
   lr: ${lr}
   critic_target_tau: 0.01
+  # actor_target_tau: 0.01
   update_every_steps: 2
   use_tb: ${use_tb}
   num_expl_steps: 2000
@@ -49,6 +51,8 @@ agent:
   use_vip: false
   use_optical_flow: false
   encoder_eval: false
+  CLOP: 0
+  use_CycAug: false
 
 hydra:
   run:
